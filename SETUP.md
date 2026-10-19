@@ -2,7 +2,7 @@
 
 This guide gets the app live on the internet so Molly can open it on her phone. No coding is needed. Plan for about an hour, most of it spent creating accounts.
 
-You'll create five free accounts (or use ones you already have) and copy a few "keys" between them. Keep a notes file open to paste things into as you go.
+You'll need the accounts below (GitHub is already set up) and copy a few "keys" between them. Keep a notes file open to paste things into as you go.
 
 | What | Why | Cost |
 |---|---|---|
@@ -16,24 +16,15 @@ You'll create five free accounts (or use ones you already have) and copy a few "
 
 ---
 
-## Step 1. Put the app's files on GitHub
+## Step 1. The app's files on GitHub (already done)
 
-1. Go to **github.com** and sign up (or log in).
-2. Click the **+** in the top-right corner, then **New repository**.
-3. Name it `when-the-beat-drops`, choose **Private**, and click **Create repository**.
-4. On the next page, click the link **uploading an existing file**.
-5. Open the `when-the-beat-drops` folder on your computer. Select **everything inside it** (the `api` and `public` folders and all the files) and drag it all onto the GitHub page.
-   - Don't drag the outer folder itself, only what's inside it.
-   - If you see a `node_modules` folder, leave it out.
-6. Wait for the uploads to finish, then click **Commit changes**.
-
-Check: your repository page should show `api`, `public`, `package.json`, `vercel.json` and the `.md` files at the top level.
+The code is already in your GitHub repository: **github.com/jakewarbu-wq/when-the-beat-drops**. There's nothing to do here. Any change pushed to that repository later goes live automatically once Step 2 is done.
 
 ## Step 2. Put the app online with Vercel
 
 1. Go to **vercel.com** and click **Sign Up**. Choose the **Hobby** plan and **Continue with GitHub**.
 2. Click **Add New…**, then **Project**.
-3. Find `when-the-beat-drops` in the list and click **Import**. (If it isn't listed, click **Adjust GitHub App Permissions** and allow Vercel to see that repository.)
+3. Find `when-the-beat-drops` in the list and click **Import**. (If it isn't listed, click **Adjust GitHub App Permissions** and allow Vercel to see that repository. Make sure you signed in to Vercel with the GitHub account that owns the repository, `jakewarbu-wq`.)
 4. Leave **Framework Preset** as **Other** and don't change any other settings. Click **Deploy**.
 5. When it finishes, click **Continue to Dashboard**. Under **Domains** you'll see the app's address, something like `when-the-beat-drops.vercel.app`.
 
@@ -140,7 +131,7 @@ It then opens full-screen like a normal app.
 | Every BPM says "approx." | Check `GETSONGBPM_API_KEY` is set and was activated from their email. Some songs simply aren't in their database. |
 | A playlist she follows isn't in the list | Spotify only lets personal apps read playlists she created or collaborates on. In Spotify, open that playlist, tap **⋯**, then **Add to other playlist** to copy it into a new playlist of her own. |
 
-**Making changes later:** edit or re-upload files in the GitHub repository and Vercel redeploys automatically within a minute or two.
+**Making changes later:** any change to the GitHub repository (by you, or by asking Claude in this project) redeploys automatically within a minute or two.
 
 **Optional settings** (add as Environment Variables, then redeploy):
 
