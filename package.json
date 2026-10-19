@@ -1,0 +1,14 @@
+{
+  "name": "when-the-beat-drops",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Spin-class music finder: Spotify + Claude + GetSongBPM",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "node dev-server.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.135.0"
+  }
+}
