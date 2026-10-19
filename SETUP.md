@@ -109,8 +109,9 @@ It then opens full-screen like a normal app.
 
 ## How Molly uses it
 
-- **From my playlists:** tick one or more of her playlists and tap **Find similar songs**. She gets 10 to 20 songs she doesn't already have in those playlists, each with a reason.
-- **Ask for songs:** type anything, like "90s dance anthems for a hill climb" or "a 45-min class: warm-up, 3 climbs, sprint finish, cool-down". Class requests come back as an ordered setlist grouped by section, with the total running time and a few spare songs at the end.
+- **Similar:** tick one or more of her playlists and tap **Find similar songs**. She gets 10 to 20 songs she doesn't already have in those playlists, each with a reason.
+- **Remix:** pick a past class playlist. Tap **Swap** on any song to get a few suggestions that fit the same spot in the ride (she can add a hint like "more 90s"). Use **↑ ↓** to reorder and **✕** to remove. **✨ Freshen every song** replaces the whole list with new songs that keep the same shape. **Save as new playlist** saves it as a new playlist; the original is never changed.
+- **Ask:** type anything, like "90s dance anthems for a hill climb" or "a 45-min class: warm-up, 3 climbs, sprint finish, cool-down". Class requests come back as an ordered setlist grouped by section, with the total running time and a few spare songs at the end.
 - Each song shows **BPM** (marked "approx." when it's an AI estimate), **length**, an **energy** bar from 1 to 10, and class tags like Climb or Sprint.
 - **▶ Spotify** opens the song in the Spotify app. **+ Add** saves it to a new or existing playlist. **✕** dismisses it so it won't be suggested again (with an Undo).
 - **Save all to a playlist** saves the whole list, or the whole class in order.

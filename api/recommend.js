@@ -105,14 +105,36 @@ function clip(s, n) {
 }
 
 function buildPrompt(body) {
-  const mode = body.mode === "playlist" ? "playlist" : "request";
+  const mode = ["playlist", "swap"].includes(body.mode) ? body.mode : "request";
   const tracks = (Array.isArray(body.tracks) ? body.tracks : []).slice(0, 300);
   const exclude = (Array.isArray(body.exclude) ? body.exclude : []).slice(0, 300);
   const topArtists = (Array.isArray(body.topArtists) ? body.topArtists : []).slice(0, 20);
   const f = body.filters || {};
   const parts = [];
 
-  if (mode === "playlist") {
+  if (mode === "swap") {
+    const setlist = (Array.isArray(body.setlist) ? body.setlist : []).slice(0, 100);
+    if (!setlist.length) throw httpError(400, "There are no songs to remix.");
+    const positions = (Array.isArray(body.positions) ? body.positions : [])
+      .map(Number)
+      .filter((n) => Number.isInteger(n) && n >= 1 && n <= setlist.length)
+      .slice(0, 100);
+    if (!positions.length) throw httpError(400, "Pick a song to swap.");
+    const perSlot = Math.max(1, Math.min(8, Number(body.perSlot) || 1));
+    const fmt = (sec) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+    parts.push(
+      `This is one of her past class playlists, in riding order:\n${setlist
+        .map((t, i) => `${i + 1}. ${clip(t.title, 120)} — ${clip(t.artist, 80)} (${fmt(Number(t.seconds) || 0)}${t.bpm ? `, ${Number(t.bpm)} BPM` : ""})`)
+        .join("\n")}`,
+      `Work out what part of the ride each song is doing (warm-up, climb, sprint, recovery, cool-down...) from its place in the order, tempo and feel.`,
+      perSlot === 1
+        ? `She wants a fresh version of this class with the same shape. For each of these positions: ${positions.join(", ")}, suggest 2 replacement songs that do the same job at that point in the ride (similar energy, tempo and length) and fit the playlist's overall style. Give the better one is_backup false and the other is_backup true.`
+        : `She wants to replace song ${positions[0]}. Suggest ${perSlot} different songs that would do the same job at that point in the ride (similar energy, tempo and length) and fit the playlist's overall style. Give them all is_backup false.`,
+      `Set section to the position number (e.g. "${positions[0]}") of the song each suggestion replaces. Never suggest a song that is already in this playlist. This is not a new class plan: set is_class_plan false, sections empty and target_minutes 0.`
+    );
+    const hint = clip(body.hint, 300).trim();
+    if (hint) parts.push(`What she'd like instead: "${hint}"`);
+  } else if (mode === "playlist") {
     const names = (body.playlistNames || []).map((n) => clip(n, 100)).join(", ");
     parts.push(
       `She picked these playlists: ${names}.`,

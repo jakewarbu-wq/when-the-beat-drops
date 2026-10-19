@@ -26,7 +26,9 @@ const state = {
   results: store.get("results"),
   filters: { bpmMin: "", bpmMax: "", minMinutes: "", maxMinutes: "", cleanOnly: false, ...(store.get("filters") || {}) },
   showFilters: false,
-  view: store.get("results") ? "results" : "pick",
+  view: store.get("results") && store.get("tab") !== "remix" ? "results" : "pick",
+  remix: store.get("remix"),
+  remixLoading: false,
   dismissed: store.get("dismissed") || [],
   topArtists: null,
   busy: null,
@@ -147,6 +149,7 @@ async function verify(title, artist) {
 
 const STEPS = {
   playlist: ["Reading your playlists", "Asking the AI for ideas", "Checking every song on Spotify", "Looking up BPM"],
+  remix: ["Asking the AI for fresh picks", "Checking every song on Spotify", "Looking up BPM"],
   request: ["Asking the AI for ideas", "Checking every song on Spotify", "Looking up BPM"],
 };
 
@@ -312,6 +315,241 @@ async function addBpm(songs) {
   songs.forEach((s) => { s.bpm = cache[s.track.id] ?? null; });
 }
 
+// ---------- remix a past playlist ----------
+
+function saveRemix() { store.set("remix", state.remix); }
+
+function enrich(s, track) {
+  return {
+    key: songKey(track.title, track.artist),
+    reason: s.reason,
+    tags: (s.tags || []).filter((t) => CLASS_TAGS.includes(t)),
+    energy: Math.max(1, Math.min(10, Number(s.energy) || 5)),
+    approxBpm: Number(s.approx_bpm) || null,
+    bpm: null,
+    track,
+  };
+}
+
+async function loadRemix(playlistId) {
+  const pl = state.playlists.find((p) => p.id === playlistId);
+  state.remixLoading = true;
+  state.error = "";
+  render();
+  try {
+    const tracks = await sp.getPlaylistTracks(playlistId, 100);
+    if (!tracks.length) throw new Error("That playlist looks empty. Try another one.");
+    const songs = tracks.map((track) => ({ key: songKey(track.title, track.artist), track, bpm: null, approxBpm: null, isNew: false }));
+    await addBpm(songs);
+    state.remix = { sourceId: playlistId, name: pl ? pl.name : "Playlist", songs };
+    saveRemix();
+  } catch (err) {
+    state.error = err.message;
+  }
+  state.remixLoading = false;
+  render();
+}
+
+// Asks the AI for songs to replace the given positions (0-based). Returns a
+// Map of position -> verified replacement songs, best first.
+async function getSwaps(positions, { hint = "", perSlot = 1 } = {}) {
+  const r = state.remix;
+  const taken = new Set(r.songs.flatMap((s) => [s.track.id, s.key]));
+  state.dismissed.forEach((d) => { taken.add(d.id); taken.add(d.key); });
+  const ai = await backend("/api/recommend", {
+    mode: "swap",
+    setlist: r.songs.map((s) => ({
+      title: s.track.title,
+      artist: s.track.artist,
+      seconds: Math.round(s.track.durationMs / 1000),
+      bpm: s.bpm || s.approxBpm || null,
+    })),
+    positions: positions.map((i) => i + 1),
+    perSlot,
+    hint,
+    filters: activeFilters(),
+    exclude: state.dismissed.slice(-150).map((d) => d.label),
+  });
+  if (state.busy) setStep(state.busy.step + 1);
+  const raw = (ai.songs || []).filter((s) => s && s.title && s.artist);
+  const checked = await pool(raw, 4, async (s) => {
+    const track = await verify(s.title, s.artist);
+    return track ? { s, track } : null;
+  });
+  const out = new Map(positions.map((i) => [i, []]));
+  const all = [];
+  // Main picks first, then backups, so each slot's best option is first.
+  const ordered = checked.filter(Boolean).sort((a, b) => Number(a.s.is_backup) - Number(b.s.is_backup));
+  for (const { s, track } of ordered) {
+    const pos = parseInt(s.section, 10) - 1;
+    const key = songKey(track.title, track.artist);
+    if (!out.has(pos) || taken.has(track.id) || taken.has(key)) continue;
+    if (state.filters.cleanOnly && track.explicit) continue;
+    taken.add(track.id); taken.add(key);
+    const song = enrich(s, track);
+    out.get(pos).push(song);
+    all.push(song);
+  }
+  if (state.busy) setStep(state.busy.step + 1);
+  await addBpm(all);
+  return out;
+}
+
+function replaceSong(index, song) {
+  const r = state.remix;
+  const old = r.songs[index];
+  r.songs[index] = { ...song, isNew: true };
+  saveRemix();
+  render();
+  toast(`Swapped in “${song.track.title}”`, () => {
+    r.songs[index] = old;
+    saveRemix();
+    render();
+  });
+}
+
+async function freshenAll() {
+  if (state.busy || !state.remix) return;
+  state.error = "";
+  state.busy = { mode: "remix", step: 0 };
+  render();
+  window.scrollTo({ top: 0 });
+  try {
+    const positions = state.remix.songs.map((_, i) => i);
+    const swaps = await getSwaps(positions, { perSlot: 1 });
+    let changed = 0;
+    for (const [i, options] of swaps) {
+      if (options.length) {
+        state.remix.songs[i] = { ...options[0], isNew: true };
+        changed++;
+      }
+    }
+    saveRemix();
+    toast(changed === positions.length ? "Every song is fresh" : `Freshened ${changed} of ${positions.length} songs`);
+  } catch (err) {
+    state.error = err.message;
+  } finally {
+    state.busy = null;
+    render();
+  }
+}
+
+function openSwap(index) {
+  const song = state.remix.songs[index];
+  openSheet(`
+    <h3>Swap “${esc(song.track.title)}”</h3>
+    <form class="newpl" data-swap-form>
+      <input name="hint" placeholder="Anything specific? (optional)" aria-label="What you'd like instead" maxlength="200">
+      <button class="btn primary" type="submit">Find</button>
+    </form>
+    <div data-swap-body><p class="muted small-text">I'll find songs that fit this spot in the class: similar energy, tempo and length.</p></div>
+  `, (el) => {
+    const body = el.querySelector("[data-swap-body]");
+    const run = async (hint) => {
+      body.innerHTML = `<div class="loading" style="padding:20px 0"><div class="eq" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div><p class="muted">Finding swaps… this can take up to a minute.</p></div>`;
+      try {
+        const options = (await getSwaps([index], { hint, perSlot: 6 })).get(index) || [];
+        if (!document.body.contains(body)) return;
+        if (!options.length) { body.innerHTML = `<p class="empty">Couldn't find a match on Spotify. Try again or add a hint.</p>`; return; }
+        body.innerHTML = `<ol class="songs">${options.map((o, n) => swapOption(o, n)).join("")}</ol>`;
+        body.querySelectorAll("[data-use]").forEach((b) => b.addEventListener("click", () => {
+          closeSheet();
+          replaceSong(index, options[Number(b.dataset.use)]);
+        }));
+      } catch (err) {
+        if (document.body.contains(body)) body.innerHTML = `<div class="notice error">${esc(err.message)}</div>`;
+      }
+    };
+    el.querySelector("[data-swap-form]").addEventListener("submit", (e) => {
+      e.preventDefault();
+      run(new FormData(e.target).get("hint").trim());
+    });
+    run("");
+  });
+}
+
+function bpmStat(s) {
+  return s.bpm
+    ? `<span class="stat"><b>${s.bpm}</b><small>BPM</small></span>`
+    : s.approxBpm
+      ? `<span class="stat"><b>${s.approxBpm}</b><small>BPM</small><span class="approx" title="AI estimate">approx.</span></span>`
+      : `<span class="stat"><b>–</b><small>BPM</small></span>`;
+}
+
+function swapOption(o, n) {
+  const t = o.track;
+  return `<li class="song">
+    <div class="head">
+      <div class="art" ${t.image ? `style="background-image:url('${esc(t.image)}')"` : ""}></div>
+      <div style="min-width:0"><p class="title">${esc(t.title)}</p><div class="artist">${esc(t.artist)}</div></div>
+    </div>
+    <div class="stats">${bpmStat(o)}<span class="stat"><b>${fmtTime(t.durationMs)}</b></span>
+      <span class="stat"><small>Energy ${o.energy}/10</small></span>${t.explicit ? `<span class="badge">E</span>` : ""}</div>
+    ${o.reason ? `<p class="reason">${esc(o.reason)}</p>` : ""}
+    <div class="actions" style="grid-template-columns:1fr 1fr">
+      <button class="btn primary" data-use="${n}">Use this</button>
+      <a class="btn" href="${esc(t.url)}" target="_blank" rel="noopener">▶ Listen</a>
+    </div>
+  </li>`;
+}
+
+function remixView() {
+  if (state.remixLoading) return `<div class="loading"><div class="eq" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div><p class="muted">Loading the playlist…</p></div>`;
+  const r = state.remix;
+  if (!r) {
+    if (!state.playlistsLoaded) return `<div class="loading"><div class="eq" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div><p class="muted">Loading your playlists…</p></div>`;
+    const own = state.playlists.filter((p) => p.mine);
+    return `
+      <h2>Remix a past class</h2>
+      <p class="muted small-text">Pick a playlist. You can swap any song for fresh suggestions that fit the same spot, then save it as a brand-new playlist. The original stays untouched.</p>
+      <div class="plist">${own.map((p) => `
+        <button class="opt pick-remix" data-action="remix-load" data-id="${esc(p.id)}">
+          <span class="cover" ${p.image ? `style="background-image:url('${esc(p.image)}')"` : ""}></span>
+          <span><div class="name">${esc(p.name)}</div><div class="meta">${p.count} songs</div></span>
+        </button>`).join("")}</div>`;
+  }
+  const total = r.songs.reduce((sum, s) => sum + s.track.durationMs, 0);
+  const swapped = r.songs.filter((s) => s.isNew).length;
+  return `
+    <h2>Remix</h2>
+    <div class="summary">
+      <p class="muted small-text">Based on: <strong style="color:var(--text)">${esc(r.name)}</strong></p>
+      <div class="total" style="margin:0"><div><div class="muted small-text">Running time</div><strong>${fmtTime(total)}</strong></div>
+        <span class="muted">${r.songs.length} songs${swapped ? ` · ${swapped} new` : ""}</span></div>
+    </div>
+    <div class="remix-tools">
+      <button class="btn" data-action="remix-freshen">✨ Freshen every song</button>
+      <button class="btn ghost" data-action="remix-reset">Pick another</button>
+    </div>
+    <ol class="songs">${r.songs.map(remixRow).join("")}</ol>
+    ${!r.songs.length ? `<p class="empty">No songs left. Tap Pick another to start again.</p>` : ""}`;
+}
+
+function remixRow(s, i) {
+  const t = s.track;
+  const last = state.remix.songs.length - 1;
+  return `<li class="song ${s.isNew ? "is-new" : ""}">
+    <div class="head">
+      <span class="num">${i + 1}</span>
+      <div class="art" ${t.image ? `style="background-image:url('${esc(t.image)}')"` : ""}></div>
+      <div style="min-width:0">
+        <p class="title">${esc(t.title)}</p>
+        <div class="artist">${esc(t.artist)}</div>
+      </div>
+    </div>
+    <div class="stats">${bpmStat(s)}<span class="stat"><b>${fmtTime(t.durationMs)}</b></span>
+      ${t.explicit ? `<span class="badge">E</span>` : ""}${s.isNew ? `<span class="badge liked">NEW</span>` : ""}</div>
+    ${s.isNew && s.reason ? `<p class="reason">${esc(s.reason)}</p>` : ""}
+    <div class="actions remix-actions">
+      <button class="btn primary" data-action="remix-swap" data-i="${i}">Swap</button>
+      <a class="btn" href="${esc(t.url)}" target="_blank" rel="noopener" aria-label="Listen in Spotify">▶</a>
+      <button class="btn" data-action="remix-move" data-i="${i}" data-dir="-1" ${i === 0 ? "disabled" : ""} aria-label="Move up">↑</button>
+      <button class="btn" data-action="remix-move" data-i="${i}" data-dir="1" ${i === last ? "disabled" : ""} aria-label="Move down">↓</button>
+      <button class="btn ghost" data-action="remix-remove" data-i="${i}" aria-label="Remove">✕</button>
+    </div>
+  </li>`;
+}
+
 // ---------- filters ----------
 
 function activeFilters() {
@@ -351,13 +589,15 @@ function render() {
       ${credit()}
     ` : `
       <div class="tabs" role="tablist">
-        <button role="tab" data-action="tab" data-tab="playlists" aria-selected="${state.tab === "playlists"}">From my playlists</button>
-        <button role="tab" data-action="tab" data-tab="ask" aria-selected="${state.tab === "ask"}">Ask for songs</button>
+        <button role="tab" data-action="tab" data-tab="playlists" aria-selected="${state.tab === "playlists"}">Similar</button>
+        <button role="tab" data-action="tab" data-tab="ask" aria-selected="${state.tab === "ask"}">Ask</button>
+        <button role="tab" data-action="tab" data-tab="remix" aria-selected="${state.tab === "remix"}">Remix</button>
       </div>
       ${state.error ? `<div class="notice error" role="alert">${esc(state.error)}</div>` : ""}
-      ${state.results ? `<button class="btn small ghost" style="margin-bottom:6px" data-action="show-results">See your last results →</button>` : ""}
-      ${state.tab === "playlists" ? playlistView() : askView()}
-      <div style="margin-top:22px">${filtersView()}</div>
+      ${state.tab === "remix" ? remixView() : `
+        ${state.results ? `<button class="btn small ghost" style="margin-bottom:6px" data-action="show-results">See your last results →</button>` : ""}
+        ${state.tab === "playlists" ? playlistView() : askView()}
+        <div style="margin-top:22px">${filtersView()}</div>`}
       ${credit()}
     `}
   `;
@@ -552,7 +792,12 @@ function renderDock() {
     document.body.appendChild(dock);
   }
   if (!state.me || state.busy || !state.config || !state.config.spotifyClientId) { dock.innerHTML = ""; return; }
-  if (state.view === "results" && state.results) {
+  if (state.view !== "results" && state.tab === "remix") {
+    const r = state.remix;
+    dock.innerHTML = r && r.songs.length && !state.remixLoading
+      ? `<div class="inner"><button class="btn primary big" data-action="remix-save">Save as new playlist</button></div>`
+      : "";
+  } else if (state.view === "results" && state.results) {
     dock.innerHTML = `<div class="inner"><button class="btn big" data-action="new-search">New search</button></div>`;
   } else if (state.tab === "playlists") {
     const n = state.selected.size;
@@ -660,6 +905,39 @@ document.addEventListener("click", (e) => {
   }
   if (a === "go-playlist") return findSongs("playlist");
   if (a === "go-ask") return findSongs("request");
+  if (a === "remix-load") return loadRemix(el.dataset.id);
+  if (a === "remix-freshen") return freshenAll();
+  if (a === "remix-reset") {
+    state.remix = null;
+    saveRemix();
+    return render();
+  }
+  if (a === "remix-swap") return openSwap(Number(el.dataset.i));
+  if (a === "remix-move") {
+    const songs = state.remix.songs;
+    const i = Number(el.dataset.i);
+    const j = i + Number(el.dataset.dir);
+    if (j < 0 || j >= songs.length) return;
+    [songs[i], songs[j]] = [songs[j], songs[i]];
+    saveRemix();
+    return render();
+  }
+  if (a === "remix-remove") {
+    const songs = state.remix.songs;
+    const i = Number(el.dataset.i);
+    const [gone] = songs.splice(i, 1);
+    saveRemix();
+    render();
+    return toast(`Removed “${gone.track.title}”`, () => {
+      songs.splice(i, 0, gone);
+      saveRemix();
+      render();
+    });
+  }
+  if (a === "remix-save") {
+    const r = state.remix;
+    return openPlaylistPicker(`Save ${r.songs.length} songs to…`, r.songs.map((s) => s.track.uri), `${r.name} (remix)`);
+  }
   if (a === "new-search" || a === "show-results") {
     state.view = a === "new-search" ? "pick" : "results";
     state.error = "";

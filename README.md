@@ -1,6 +1,6 @@
 # When the Beat Drops
 
-A phone-first web app for a spin instructor to find and organise class music. It logs in to Spotify, suggests songs from her playlists or from a plain-English request (including full class setlists), and saves them to playlists.
+A phone-first web app for a spin instructor to find and organise class music. It logs in to Spotify, suggests songs from her playlists or from a plain-English request (including full class setlists), remixes past class playlists song by song, and saves the results to playlists.
 
 - **Setup (non-technical):** [SETUP.md](SETUP.md)
 - **What couldn't be built as described:** [LIMITATIONS.md](LIMITATIONS.md)

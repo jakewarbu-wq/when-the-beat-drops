@@ -89,7 +89,7 @@ a { color: var(--accent); }
 }
 
 /* Tabs */
-.tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; background: var(--surface); border-radius: 999px; padding: 5px; margin: 6px 0 18px; }
+.tabs { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; background: var(--surface); border-radius: 999px; padding: 5px; margin: 6px 0 18px; }
 .tabs button { min-height: 50px; border: 0; border-radius: 999px; background: transparent; font-weight: 800; font-size: 16px; color: var(--muted); }
 .tabs button[aria-selected="true"] { background: var(--accent); color: var(--accent-ink); }
 
@@ -242,3 +242,13 @@ footer.credit a { color: var(--muted); }
   .top .brand { font-size: 36px; }
   .songs.grid { grid-template-columns: 1fr 1fr; }
 }
+
+/* Remix */
+.pick-remix { width: 100%; display: flex; align-items: center; gap: 14px; text-align: left; font-size: 17px; border: 0; background: var(--surface); border-radius: var(--radius); padding: 8px 14px 8px 8px; min-height: 68px; }
+.pick-remix .cover { width: 52px; height: 52px; border-radius: 10px; }
+.pick-remix .name { font-weight: 600; }
+.pick-remix .meta { font-size: 14px; color: var(--muted); }
+.remix-tools { display: grid; grid-template-columns: 1.4fr 1fr; gap: 8px; margin-bottom: 14px; }
+.remix-actions { grid-template-columns: 1.6fr 1fr 1fr 1fr 1fr; }
+.song .num { font-family: Anton, Impact, sans-serif; font-size: 26px; color: var(--muted); width: 30px; text-align: center; flex: none; }
+.song.is-new { box-shadow: inset 4px 0 0 var(--accent); }
