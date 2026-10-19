@@ -28,7 +28,7 @@ button { cursor: pointer; }
 a { color: var(--accent); }
 .hidden { display: none !important; }
 
-#app { max-width: 760px; margin: 0 auto; padding: 0 16px calc(120px + var(--safe-bottom)); min-height: 100vh; }
+#app { max-width: 760px; margin: 0 auto; padding: 0 16px; }
 
 /* Brand */
 .brand {
@@ -44,7 +44,7 @@ a { color: var(--accent); }
 .splash .brand { font-size: clamp(56px, 16vw, 120px); }
 
 /* Login */
-.login { min-height: 100vh; display: flex; flex-direction: column; justify-content: center; gap: 28px; padding: 40px 0; }
+.login { min-height: calc(100vh - 140px); display: flex; flex-direction: column; justify-content: center; gap: 28px; padding: 40px 0; }
 .login .brand { font-size: clamp(64px, 19vw, 140px); }
 .login p.tagline { font-size: 20px; color: var(--muted); margin: 0; max-width: 28ch; }
 .eq { display: flex; gap: 6px; align-items: flex-end; height: 48px; }
@@ -235,7 +235,7 @@ textarea.ask:focus, .search:focus, .field input:focus, .field select:focus { out
 #toast.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
 #toast button { background: none; border: 0; color: var(--bg); text-decoration: underline; font-weight: 800; min-height: 32px; }
 
-footer.credit { text-align: center; color: var(--muted); font-size: 13px; margin: 36px 0 0; }
+footer.credit { text-align: center; color: var(--muted); font-size: 13px; margin: 0 auto; padding: 16px 16px calc(110px + var(--safe-bottom)); max-width: 760px; }
 footer.credit a { color: var(--muted); }
 
 @media (min-width: 700px) {

@@ -364,8 +364,10 @@ function render() {
   renderDock();
 }
 
+// The GetSongBPM credit is a static footer in index.html: their backlink
+// checker reads the raw HTML and can't see anything drawn by this script.
 function credit() {
-  return `<footer class="credit">BPM data from <a href="https://getsongbpm.com" target="_blank" rel="noopener">GetSongBPM.com</a> · Music from Spotify</footer>`;
+  return "";
 }
 
 function header() {
@@ -386,7 +388,6 @@ function renderLogin() {
       <p class="tagline">Find the perfect tracks for every climb, sprint and cool-down.</p>
       ${state.error ? `<div class="notice error" role="alert">${esc(state.error)}</div>` : ""}
       <button class="btn primary big" data-action="login">Log in with Spotify</button>
-      <footer class="credit">BPM data from <a href="https://getsongbpm.com" target="_blank" rel="noopener">GetSongBPM.com</a> · Music from Spotify</footer>
     </section>`;
   $sheet.innerHTML = "";
   renderDock();
