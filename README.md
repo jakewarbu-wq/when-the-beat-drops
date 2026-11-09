@@ -18,6 +18,8 @@ Phone/laptop browser ──(Spotify login, PKCE)──> Spotify Web API
 2. For a search it sends her playlist contents or request to `/api/recommend`, which asks Claude for songs with reasons, class tags, energy and an estimated BPM.
 3. The browser checks every suggestion with Spotify search and drops anything that doesn't resolve to a real track, plus songs already in the chosen playlists or dismissed earlier.
 4. `/api/bpm` looks up real BPMs on GetSongBPM; misses show the AI estimate labelled "approx."
+5. Every song also shows the cadence she'd ride it at (RPM). Riders pedal on the beat or on the half-time beat, so a 128 BPM song is a 64 RPM climb. The cadence filter accepts either.
+6. A class setlist can be reordered by dragging, given a cue per song, and opened as a cue sheet with start times that reads well on a phone and prints cleanly. Class plans are kept under "Your classes" on the device.
 
 The AI and BPM keys live only in the serverless functions. Each function call must carry a valid Spotify token, and `ALLOWED_SPOTIFY_USER_IDS` limits use to her account.
 

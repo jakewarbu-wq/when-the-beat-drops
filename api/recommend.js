@@ -21,6 +21,7 @@ Rules:
 - Each reason is one short line (under 90 characters) a busy instructor can scan, e.g. "high-energy house, similar to Calvin Harris, good for sprints".
 - approx_bpm is your best estimate of the song's tempo in BPM (the app labels it "approx." unless a BPM database confirms it).
 - Respect any filters given (BPM range, maximum length, clean only) as closely as you can.
+- cue is only for class plans: one short coaching cue (under 70 characters) for how to ride the song, covering position, resistance or effort, e.g. "Seated climb, add a turn each chorus". Never mention exact timestamps in the song. Use an empty string when it is not a class plan.
 - Vary artists: no more than two songs by the same artist unless asked.`;
 
 const SCHEMA = {
@@ -53,7 +54,7 @@ const SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["title", "artist", "reason", "tags", "energy", "approx_bpm", "section", "is_backup"],
+        required: ["title", "artist", "reason", "tags", "energy", "approx_bpm", "section", "is_backup", "cue"],
         properties: {
           title: { type: "string" },
           artist: { type: "string" },
@@ -63,6 +64,7 @@ const SCHEMA = {
           approx_bpm: { type: "integer" },
           section: { type: "string", description: "For class plans, one of the names in sections. Empty string otherwise." },
           is_backup: { type: "boolean", description: "For class plans, true for the one spare song per section used if another can't be found. False otherwise." },
+          cue: { type: "string", description: "For class plans, a short coaching cue for riding this song. Empty string otherwise." },
         },
       },
     },
@@ -146,7 +148,7 @@ function buildPrompt(body) {
     if (!req) throw httpError(400, "Type what you're looking for first.");
     parts.push(
       `Her request: "${req}"`,
-      `If she's asking for a whole class (it mentions a class length, or several sections like warm-up, climbs, sprints, cool-down), make it a class plan: list the sections in order, choose songs for each section in riding order so the total running time is close to the requested length, and add exactly one extra song per section with is_backup true. Otherwise suggest 22 songs that fit, with no sections.`
+      `If she's asking for a whole class (it mentions a class length, or several sections like warm-up, climbs, sprints, cool-down), make it a class plan: list the sections in order, choose songs for each section in riding order so the total running time is close to the requested length, add exactly one extra song per section with is_backup true, and give every song a cue. Otherwise suggest 22 songs that fit, with no sections.`
     );
     if (topArtists.length) parts.push(`For taste context only, artists she listens to a lot: ${topArtists.map((a) => clip(a, 80)).join(", ")}.`);
   }
@@ -154,6 +156,10 @@ function buildPrompt(body) {
   const filterBits = [];
   if (f.bpmMin) filterBits.push(`BPM at least ${Number(f.bpmMin)}`);
   if (f.bpmMax) filterBits.push(`BPM at most ${Number(f.bpmMax)}`);
+  if (f.rpmMin || f.rpmMax) {
+    const range = f.rpmMin && f.rpmMax ? `between ${Number(f.rpmMin)} and ${Number(f.rpmMax)}` : f.rpmMin ? `at least ${Number(f.rpmMin)}` : `at most ${Number(f.rpmMax)}`;
+    filterBits.push(`rideable cadence ${range} RPM (riders pedal on the beat or on the half-time beat, so the song's BPM should be that or double it)`);
+  }
   if (f.maxMinutes) filterBits.push(`songs no longer than ${Number(f.maxMinutes)} minutes`);
   if (f.minMinutes) filterBits.push(`songs at least ${Number(f.minMinutes)} minutes`);
   if (f.cleanOnly) filterBits.push(`clean (non-explicit) songs only`);

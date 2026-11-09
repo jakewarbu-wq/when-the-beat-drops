@@ -9,6 +9,8 @@ const EXAMPLES = [
   "Clean pop remixes around 128 BPM for flat road",
 ];
 const MAX_RESULTS = 20;
+const MAX_CLASSES = 15;
+const BLANK_FILTERS = { bpmMin: "", bpmMax: "", rpmMin: "", rpmMax: "", minMinutes: "", maxMinutes: "", cleanOnly: false };
 
 const $app = document.getElementById("app");
 const $sheet = document.getElementById("sheet-root");
@@ -24,7 +26,8 @@ const state = {
   plFilter: "",
   askText: store.get("askText") || "",
   results: store.get("results"),
-  filters: { bpmMin: "", bpmMax: "", minMinutes: "", maxMinutes: "", cleanOnly: false, ...(store.get("filters") || {}) },
+  filters: { ...BLANK_FILTERS, ...(store.get("filters") || {}) },
+  classes: store.get("classes") || [],
   showFilters: false,
   view: store.get("results") && store.get("tab") !== "remix" ? "results" : "pick",
   remix: store.get("remix"),
@@ -62,7 +65,49 @@ function fmtLong(ms) {
   return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m} min`;
 }
 
-function saveResults() { store.set("results", state.results); }
+// Class plans are also kept in a "Your classes" list, so the cues and order
+// she worked out survive her next search.
+function saveResults() {
+  const r = state.results;
+  store.set("results", r);
+  if (!r || !r.isClass) return;
+  r.id ||= String(r.createdAt);
+  state.classes = [r, ...state.classes.filter((c) => c.id !== r.id)].slice(0, MAX_CLASSES);
+  store.set("classes", state.classes);
+}
+
+// ---------- cadence ----------
+// Riders pedal one turn per beat, or one turn every two beats (half-time).
+// A 128 BPM song is a 64 RPM climb; a 95 BPM song is a 95 RPM flat.
+const RPM_MIN = 55;
+const RPM_MAX = 120;
+const RPM_TARGET = [[/climb|hill/i, 70], [/sprint|flat/i, 95], [/warm|cool|recover/i, 85]];
+
+function cadenceOptions(bpm) {
+  if (!bpm) return [];
+  return [{ rpm: Math.round(bpm), half: false }, { rpm: Math.round(bpm / 2), half: true }]
+    .filter((o) => o.rpm >= RPM_MIN && o.rpm <= RPM_MAX);
+}
+
+// The cadence she'd most likely ride this song at, or null if we can't tell.
+// When both the beat and the half-time beat are rideable, the song's place in
+// the class (or its first tag) decides.
+function cadence(song) {
+  const opts = cadenceOptions(song.bpm || song.approxBpm);
+  if (opts.length < 2) return opts[0] || null;
+  const hints = [song.section, ...(song.tags || [])].filter(Boolean);
+  let target = 90;
+  outer: for (const h of hints) {
+    for (const [re, rpm] of RPM_TARGET) if (re.test(h)) { target = rpm; break outer; }
+  }
+  return opts.reduce((a, b) => (Math.abs(b.rpm - target) < Math.abs(a.rpm - target) ? b : a));
+}
+
+function rpmStat(s) {
+  const c = cadence(s);
+  if (!c) return "";
+  return `<span class="stat" title="${c.half ? "Pedal on every other beat" : "Pedal on the beat"}"><b>${c.rpm}</b><small>RPM</small>${c.half ? `<span class="approx">half-time</span>` : ""}</span>`;
+}
 function saveFilters() { store.set("filters", state.filters); }
 
 let toastTimer;
@@ -222,6 +267,7 @@ async function findSongs(mode) {
         bpm: null,
         section: s.section || "",
         isBackup: Boolean(s.is_backup),
+        cue: String(s.cue || "").slice(0, 140),
         track,
       });
     }
@@ -287,9 +333,14 @@ function arrangeClass(sectionNames, songs, raw) {
   return result;
 }
 
+const BPM_RETRY_MS = 7 * 24 * 60 * 60 * 1000;
+
 async function addBpm(songs) {
+  // Cache: a number is a real BPM. { miss: time } means GetSongBPM didn't have
+  // the song, and we ask again after a week in case it has been added.
   const cache = store.get("bpmCache") || {};
-  const missing = songs.filter((s) => !(s.track.id in cache));
+  const fresh = (e) => typeof e === "number" || Boolean(e && e.miss && Date.now() - e.miss < BPM_RETRY_MS);
+  const missing = songs.filter((s) => !fresh(cache[s.track.id]));
   if (missing.length && state.config.bpmConfigured) {
     for (let i = 0; i < missing.length; i += 40) {
       const chunk = missing.slice(i, i + 40);
@@ -302,7 +353,11 @@ async function addBpm(songs) {
             artist: s.track.artists[0],
           })),
         });
-        for (const s of chunk) cache[s.track.id] = res.results ? res.results[s.track.id] ?? null : null;
+        // Songs whose lookup failed (rate limit, timeout) aren't in the
+        // results, so they stay uncached and get another try next time.
+        for (const s of chunk) {
+          if (res.results && s.track.id in res.results) cache[s.track.id] = res.results[s.track.id] || { miss: Date.now() };
+        }
       } catch (err) {
         console.warn("BPM lookup failed", err);
       }
@@ -312,7 +367,7 @@ async function addBpm(songs) {
     if (ids.length > 2000) ids.slice(0, ids.length - 2000).forEach((id) => delete cache[id]);
     store.set("bpmCache", cache);
   }
-  songs.forEach((s) => { s.bpm = cache[s.track.id] ?? null; });
+  songs.forEach((s) => { s.bpm = typeof cache[s.track.id] === "number" ? cache[s.track.id] : null; });
 }
 
 // ---------- remix a past playlist ----------
@@ -483,7 +538,7 @@ function swapOption(o, n) {
       <div class="art" ${t.image ? `style="background-image:url('${esc(t.image)}')"` : ""}></div>
       <div style="min-width:0"><p class="title">${esc(t.title)}</p><div class="artist">${esc(t.artist)}</div></div>
     </div>
-    <div class="stats">${bpmStat(o)}<span class="stat"><b>${fmtTime(t.durationMs)}</b></span>
+    <div class="stats">${bpmStat(o)}${rpmStat(o)}<span class="stat"><b>${fmtTime(t.durationMs)}</b></span>
       <span class="stat"><small>Energy ${o.energy}/10</small></span>${t.explicit ? `<span class="badge">E</span>` : ""}</div>
     ${o.reason ? `<p class="reason">${esc(o.reason)}</p>` : ""}
     <div class="actions" style="grid-template-columns:1fr 1fr">
@@ -537,7 +592,7 @@ function remixRow(s, i) {
         <div class="artist">${esc(t.artist)}</div>
       </div>
     </div>
-    <div class="stats">${bpmStat(s)}<span class="stat"><b>${fmtTime(t.durationMs)}</b></span>
+    <div class="stats">${bpmStat(s)}${rpmStat(s)}<span class="stat"><b>${fmtTime(t.durationMs)}</b></span>
       ${t.explicit ? `<span class="badge">E</span>` : ""}${s.isNew ? `<span class="badge liked">NEW</span>` : ""}</div>
     ${s.isNew && s.reason ? `<p class="reason">${esc(s.reason)}</p>` : ""}
     <div class="actions remix-actions">
@@ -557,6 +612,8 @@ function activeFilters() {
   const out = {};
   if (Number(f.bpmMin)) out.bpmMin = Number(f.bpmMin);
   if (Number(f.bpmMax)) out.bpmMax = Number(f.bpmMax);
+  if (Number(f.rpmMin)) out.rpmMin = Number(f.rpmMin);
+  if (Number(f.rpmMax)) out.rpmMax = Number(f.rpmMax);
   if (Number(f.minMinutes)) out.minMinutes = Number(f.minMinutes);
   if (Number(f.maxMinutes)) out.maxMinutes = Number(f.maxMinutes);
   if (f.cleanOnly) out.cleanOnly = true;
@@ -568,6 +625,11 @@ function passes(song) {
   const bpm = song.bpm || song.approxBpm;
   if (f.bpmMin && bpm && bpm < f.bpmMin) return false;
   if (f.bpmMax && bpm && bpm > f.bpmMax) return false;
+  // Cadence: fine if she could ride it in range on the beat or half-time.
+  if ((f.rpmMin || f.rpmMax) && bpm) {
+    const ok = cadenceOptions(bpm).some((o) => (!f.rpmMin || o.rpm >= f.rpmMin) && (!f.rpmMax || o.rpm <= f.rpmMax));
+    if (!ok) return false;
+  }
   const min = song.track.durationMs / 60000;
   if (f.minMinutes && min < f.minMinutes) return false;
   if (f.maxMinutes && min > f.maxMinutes) return false;
@@ -581,9 +643,10 @@ function render() {
   if (!state.config) return;
   if (!state.config.spotifyClientId) return renderSetupNeeded();
   if (!state.me) return renderLogin();
+  syncWakeLock();
   $app.innerHTML = `
     ${header()}
-    ${state.busy ? loadingView() : state.view === "results" && state.results ? `
+    ${state.busy ? loadingView() : state.view === "cue" && state.results && state.results.isClass ? cueView() : state.view === "results" && state.results ? `
       ${state.error ? `<div class="notice error" role="alert">${esc(state.error)}</div>` : ""}
       ${resultsView()}
       ${credit()}
@@ -596,6 +659,7 @@ function render() {
       ${state.error ? `<div class="notice error" role="alert">${esc(state.error)}</div>` : ""}
       ${state.tab === "remix" ? remixView() : `
         ${state.results ? `<button class="btn small ghost" style="margin-bottom:6px" data-action="show-results">See your last results →</button>` : ""}
+        ${classesView()}
         ${state.tab === "playlists" ? playlistView() : askView()}
         <div style="margin-top:22px">${filtersView()}</div>`}
       ${credit()}
@@ -688,6 +752,11 @@ function filtersView() {
         <label class="field">Max BPM<input type="number" inputmode="numeric" min="40" max="220" value="${esc(f.bpmMax)}" data-filter="bpmMax" placeholder="Any"></label>
       </div>
       <div class="row">
+        <label class="field">Min cadence (RPM)<input type="number" inputmode="numeric" min="${RPM_MIN}" max="${RPM_MAX}" value="${esc(f.rpmMin)}" data-filter="rpmMin" placeholder="Any"></label>
+        <label class="field">Max cadence (RPM)<input type="number" inputmode="numeric" min="${RPM_MIN}" max="${RPM_MAX}" value="${esc(f.rpmMax)}" data-filter="rpmMax" placeholder="Any"></label>
+      </div>
+      <p class="muted small-text" style="margin:-4px 0 0">Cadence counts half-time too: a 128 BPM song rides as a 64 RPM climb.</p>
+      <div class="row">
         <label class="field">Shortest<select data-filter="minMinutes">${lenOpts(f.minMinutes, [2, 3, 4, 5])}</select></label>
         <label class="field">Longest<select data-filter="maxMinutes">${lenOpts(f.maxMinutes, [3, 4, 5, 6, 7, 8, 10])}</select></label>
       </div>
@@ -713,16 +782,17 @@ function resultsView() {
     body = `
       <div class="total"><div><div class="muted small-text">Total running time</div><strong>${fmtTime(total)}</strong></div>
         ${r.targetMinutes ? `<span class="muted">Target ${r.targetMinutes} min</span>` : ""}</div>
-      ${r.sections.map((sec) => {
-        const list = sec.keys.map((k) => byKey.get(k)).filter((s) => s && passes(s));
-        if (!list.length) return "";
-        const secTime = list.reduce((sum, s) => sum + s.track.durationMs, 0);
-        return `<div class="section-head"><h3>${esc(sec.name)}</h3><span>${sec.spare ? "not in total" : fmtTime(secTime)}</span></div>
-          ${sec.spare ? `<p class="spares-note">Backup picks in case you want to swap something.</p>` : ""}
-          <ol class="songs">${list.map(songCard).join("")}</ol>`;
+      <button class="btn" style="width:100%;margin-bottom:6px" data-action="cue-sheet">📋 Open cue sheet</button>
+      <p class="muted small-text" style="margin:0 0 4px">Drag ⠿ to reorder songs or pull in a spare. Add a cue to any song.</p>
+      ${classTimeline(r).map((sec) => {
+        if (!sec.rows.length && (sec.spare || sec.hasHidden)) return "";
+        return `<div class="section-head"><h3>${esc(sec.name)}</h3><span>${sec.spare ? "not in total" : sec.rows.length ? `starts ${fmtTime(sec.start)} · ${fmtTime(sec.length)}` : "empty"}</span></div>
+          ${sec.spare ? `<p class="spares-note">Backup picks in case you want to swap something. Drag one into the class to use it.</p>` : ""}
+          <ol class="songs" data-sec="${sec.index}">${sec.rows.map((row) => songCard(row.song, { inClass: true, start: sec.spare ? null : row.start })).join("")}${
+            sec.rows.length ? "" : `<li class="drop-empty">Drag a song here</li>`}</ol>`;
       }).join("")}`;
   } else {
-    body = `<ol class="songs grid">${visible.map(songCard).join("")}</ol>`;
+    body = `<ol class="songs grid">${visible.map((s) => songCard(s)).join("")}</ol>`;
   }
 
   return `
@@ -740,7 +810,24 @@ function resultsView() {
   `;
 }
 
-function songCard(s) {
+// The class in riding order with start times: one entry per section, each
+// with the songs that pass the filters. Spares don't count towards the clock.
+function classTimeline(r) {
+  const byKey = new Map(r.songs.map((s) => [s.key, s]));
+  let clock = 0;
+  return r.sections.map((sec, index) => {
+    const all = sec.keys.map((k) => byKey.get(k)).filter(Boolean);
+    const start = clock;
+    const rows = all.filter(passes).map((song) => {
+      const row = { song, start: clock };
+      if (!sec.spare) clock += song.track.durationMs;
+      return row;
+    });
+    return { index, name: sec.name, spare: Boolean(sec.spare), start, length: clock - start, rows, hasHidden: all.length > rows.length };
+  });
+}
+
+function songCard(s, { inClass = false, start = null } = {}) {
   const t = s.track;
   const bpm = s.bpm
     ? `<span class="stat"><b>${s.bpm}</b><small>BPM</small></span>`
@@ -751,13 +838,16 @@ function songCard(s) {
   return `<li class="song" data-key="${esc(s.key)}">
     <div class="head">
       <div class="art" ${t.image ? `style="background-image:url('${esc(t.image)}')"` : ""}></div>
-      <div style="min-width:0">
+      <div style="min-width:0;flex:1">
+        ${start !== null ? `<div class="starts">Starts at ${fmtTime(start)}</div>` : ""}
         <p class="title">${esc(t.title)}</p>
         <div class="artist">${esc(t.artist)}${t.year ? ` · ${esc(t.year)}` : ""}</div>
       </div>
+      ${inClass ? `<button class="drag" data-drag="${esc(s.key)}" aria-label="Move ${esc(t.title)}. Drag, or use the up and down arrow keys.">⠿</button>` : ""}
     </div>
     <div class="stats">
       ${bpm}
+      ${rpmStat(s)}
       <span class="stat"><b>${fmtTime(t.durationMs)}</b></span>
       <span class="stat" aria-label="Energy ${s.energy} out of 10"><span class="energy">${bars}</span><small>${s.energy}/10</small></span>
       ${t.explicit ? `<span class="badge" title="Explicit">E</span>` : ""}
@@ -765,6 +855,7 @@ function songCard(s) {
     </div>
     ${s.tags.length ? `<div class="tags">${s.tags.map((g) => `<span class="tag">${esc(g)}</span>`).join("")}</div>` : ""}
     ${s.reason ? `<p class="reason">${esc(s.reason)}</p>` : ""}
+    ${inClass ? `<input class="cue" data-cue="${esc(s.key)}" value="${esc(s.cue || "")}" maxlength="140" placeholder="Add a cue: resistance, position, effort…" aria-label="Cue for ${esc(t.title)}">` : ""}
     <div class="actions">
       <a class="btn primary" href="${esc(t.url)}" target="_blank" rel="noopener">▶ Spotify</a>
       <button class="btn" data-action="add" data-key="${esc(s.key)}">+ Add</button>
@@ -772,6 +863,178 @@ function songCard(s) {
     </div>
   </li>`;
 }
+
+// ---------- class plans: saved list, cue sheet, reordering ----------
+
+function classesView() {
+  if (!state.classes.length) return "";
+  return `<details class="classes" ${state.classes.length <= 3 ? "open" : ""}>
+    <summary>Your classes (${state.classes.length})</summary>
+    ${state.classes.map((c) => {
+      const mins = Math.round(classTotal(c) / 60000);
+      const date = new Date(c.createdAt).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+      return `<div class="class-row">
+        <button class="opt" data-action="class-open" data-id="${esc(c.id)}"><span><div class="name">${esc(c.label)}</div><div class="meta">${date} · ${mins} min</div></span></button>
+        <button class="btn ghost" data-action="class-delete" data-id="${esc(c.id)}" aria-label="Delete this class">✕</button>
+      </div>`;
+    }).join("")}
+  </details>`;
+}
+
+function classTotal(r) {
+  const byKey = new Map(r.songs.map((s) => [s.key, s]));
+  return r.sections.filter((sec) => !sec.spare).flatMap((sec) => sec.keys)
+    .reduce((sum, k) => sum + (byKey.has(k) ? byKey.get(k).track.durationMs : 0), 0);
+}
+
+// A big, plain list she can teach from on her phone or print on paper.
+function cueView() {
+  const r = state.results;
+  const timeline = classTimeline(r).filter((sec) => !sec.spare && sec.rows.length);
+  const total = timeline.reduce((sum, sec) => sum + sec.length, 0);
+  const count = timeline.reduce((n, sec) => n + sec.rows.length, 0);
+  return `<div class="cue-sheet">
+    <div class="cue-top no-print">
+      <button class="btn small" data-action="cue-back">← Back</button>
+      <button class="btn small" data-action="cue-print">Print</button>
+    </div>
+    <h2>${esc(r.label)}</h2>
+    <p class="cue-meta">${fmtTime(total)} · ${count} songs</p>
+    ${timeline.map((sec) => `
+      <div class="cue-section"><h3>${esc(sec.name)}</h3><span>${fmtTime(sec.start)}</span></div>
+      <ol class="cue-list">${sec.rows.map(({ song: s, start }) => {
+        const c = cadence(s);
+        const bpm = s.bpm || s.approxBpm;
+        const bits = [fmtTime(s.track.durationMs), bpm ? `${bpm} BPM${s.bpm ? "" : " approx."}` : "", c ? `${c.rpm} RPM${c.half ? " half-time" : ""}` : ""].filter(Boolean);
+        return `<li>
+          <span class="at">${fmtTime(start)}</span>
+          <div>
+            <div class="cue-title">${esc(s.track.title)}</div>
+            <div class="cue-artist">${esc(s.track.artist)}</div>
+            <div class="cue-stats">${bits.join(" · ")}</div>
+            ${s.cue ? `<div class="cue-text">${esc(s.cue)}</div>` : ""}
+          </div>
+        </li>`;
+      }).join("")}</ol>`).join("")}
+    ${count ? "" : `<p class="empty">No songs in this class.</p>`}
+  </div>`;
+}
+
+// Keep the screen awake while the cue sheet is open, where the browser allows.
+let wakeLock = null;
+function syncWakeLock() {
+  const want = state.view === "cue" && !state.busy && document.visibilityState === "visible";
+  if (want && !wakeLock && navigator.wakeLock) {
+    navigator.wakeLock.request("screen").then((lock) => {
+      wakeLock = lock;
+      lock.addEventListener("release", () => { if (wakeLock === lock) wakeLock = null; });
+      syncWakeLock();
+    }).catch(() => {});
+  } else if (!want && wakeLock) {
+    wakeLock.release().catch(() => {});
+    wakeLock = null;
+  }
+}
+document.addEventListener("visibilitychange", syncWakeLock);
+
+// Moves a song to sit before `beforeKey` in section `secIndex` (or at the end
+// of that section when beforeKey is null).
+function moveSong(key, secIndex, beforeKey) {
+  const r = state.results;
+  const to = r.sections[secIndex];
+  if (!to || key === beforeKey) return;
+  for (const sec of r.sections) {
+    const i = sec.keys.indexOf(key);
+    if (i >= 0) sec.keys.splice(i, 1);
+  }
+  const at = beforeKey ? to.keys.indexOf(beforeKey) : -1;
+  to.keys.splice(at >= 0 ? at : to.keys.length, 0, key);
+  const song = r.songs.find((s) => s.key === key);
+  if (song && !to.spare) song.section = to.name;
+  saveResults();
+  render();
+}
+
+// Keyboard version of dragging: one place up or down, crossing sections.
+function nudgeSong(key, dir) {
+  const r = state.results;
+  const secs = classTimeline(r);
+  const si = secs.findIndex((sec) => sec.rows.some((row) => row.song.key === key));
+  if (si < 0) return;
+  const keys = secs[si].rows.map((row) => row.song.key);
+  const i = keys.indexOf(key);
+  if (dir < 0) {
+    if (i > 0) moveSong(key, si, keys[i - 1]);
+    else if (si > 0) moveSong(key, si - 1, null);
+    else return;
+  } else if (i < keys.length - 1) moveSong(key, si, keys[i + 2] || null);
+  else if (si < secs.length - 1) moveSong(key, si + 1, secs[si + 1].rows.length ? secs[si + 1].rows[0].song.key : null);
+  else return;
+  const handle = [...document.querySelectorAll("[data-drag]")].find((b) => b.dataset.drag === key);
+  if (handle) handle.focus();
+}
+
+let drag = null;
+
+// Where the dragged card would land: the gap nearest the finger.
+function dropSlot(y) {
+  let best = null;
+  const consider = (slot) => { if (!best || Math.abs(slot.y - y) < Math.abs(best.y - y)) best = slot; };
+  document.querySelectorAll("ol.songs[data-sec]").forEach((ol) => {
+    const sec = Number(ol.dataset.sec);
+    const cards = [...ol.querySelectorAll(".song")].filter((c) => c !== drag.card);
+    if (!cards.length) {
+      const box = ol.getBoundingClientRect();
+      return consider({ sec, before: null, y: box.top + (drag.card.parentNode === ol ? 0 : box.height / 2) });
+    }
+    cards.forEach((c) => consider({ sec, before: c.dataset.key, y: c.getBoundingClientRect().top - 5 }));
+    consider({ sec, before: null, y: cards[cards.length - 1].getBoundingClientRect().bottom + 5 });
+  });
+  return best;
+}
+
+function dragFrame() {
+  if (!drag) return;
+  // Scroll when the finger is near the top or bottom edge.
+  const edge = 90;
+  if (drag.y < edge) window.scrollBy(0, -Math.ceil((edge - drag.y) / 6));
+  else if (drag.y > innerHeight - edge) window.scrollBy(0, Math.ceil((drag.y - (innerHeight - edge)) / 6));
+  drag.card.style.transform = `translateY(${drag.y + scrollY - drag.startY}px) scale(1.02)`;
+  drag.slot = dropSlot(drag.y);
+  if (drag.slot) drag.line.style.top = `${drag.slot.y + scrollY - 2}px`;
+  drag.frame = requestAnimationFrame(dragFrame);
+}
+
+function endDrag(drop) {
+  if (!drag) return;
+  const { card, line, key, slot, frame } = drag;
+  cancelAnimationFrame(frame);
+  drag = null;
+  line.remove();
+  card.classList.remove("dragging");
+  card.style.transform = "";
+  if (drop && slot) moveSong(key, slot.sec, slot.before);
+}
+
+document.addEventListener("pointerdown", (e) => {
+  const handle = e.target.closest("[data-drag]");
+  if (!handle || drag || (e.pointerType === "mouse" && e.button !== 0)) return;
+  e.preventDefault();
+  handle.setPointerCapture(e.pointerId);
+  const card = handle.closest(".song");
+  const line = document.createElement("div");
+  line.className = "drop-line";
+  const box = document.getElementById("app").getBoundingClientRect();
+  line.style.left = `${box.left + 16}px`;
+  line.style.width = `${box.width - 32}px`;
+  document.body.appendChild(line);
+  card.classList.add("dragging");
+  drag = { key: handle.dataset.drag, card, line, pointerId: e.pointerId, y: e.clientY, startY: e.clientY + scrollY, slot: null, frame: 0 };
+  drag.frame = requestAnimationFrame(dragFrame);
+});
+document.addEventListener("pointermove", (e) => { if (drag && e.pointerId === drag.pointerId) drag.y = e.clientY; });
+document.addEventListener("pointerup", (e) => { if (drag && e.pointerId === drag.pointerId) endDrag(true); });
+document.addEventListener("pointercancel", (e) => { if (drag && e.pointerId === drag.pointerId) endDrag(false); });
 
 function loadingView() {
   const steps = STEPS[state.busy.mode];
@@ -791,7 +1054,7 @@ function renderDock() {
     dock.className = "dock";
     document.body.appendChild(dock);
   }
-  if (!state.me || state.busy || !state.config || !state.config.spotifyClientId) { dock.innerHTML = ""; return; }
+  if (!state.me || state.busy || !state.config || !state.config.spotifyClientId || state.view === "cue") { dock.innerHTML = ""; return; }
   if (state.view !== "results" && state.tab === "remix") {
     const r = state.remix;
     dock.innerHTML = r && r.songs.length && !state.remixLoading
@@ -944,9 +1207,39 @@ document.addEventListener("click", (e) => {
     render();
     return window.scrollTo({ top: 0 });
   }
+  if (a === "cue-sheet" || a === "cue-back") {
+    state.view = a === "cue-sheet" ? "cue" : "results";
+    render();
+    return window.scrollTo({ top: 0 });
+  }
+  if (a === "cue-print") return window.print();
+  if (a === "class-open") {
+    const cls = state.classes.find((c) => c.id === el.dataset.id);
+    if (!cls) return;
+    state.results = cls;
+    saveResults();
+    state.view = "results";
+    render();
+    return window.scrollTo({ top: 0 });
+  }
+  if (a === "class-delete") {
+    const i = state.classes.findIndex((c) => c.id === el.dataset.id);
+    if (i < 0) return;
+    const [gone] = state.classes.splice(i, 1);
+    const wasOpen = state.results && state.results.id === gone.id;
+    if (wasOpen) { state.results = null; store.set("results", null); }
+    store.set("classes", state.classes);
+    render();
+    return toast("Class deleted", () => {
+      state.classes.splice(i, 0, gone);
+      store.set("classes", state.classes);
+      if (wasOpen) { state.results = gone; store.set("results", gone); }
+      render();
+    });
+  }
   if (a === "toggle-filters") { state.showFilters = !state.showFilters; return render(); }
   if (a === "clear-filters") {
-    state.filters = { bpmMin: "", bpmMax: "", minMinutes: "", maxMinutes: "", cleanOnly: false };
+    state.filters = { ...BLANK_FILTERS };
     saveFilters();
     return render();
   }
@@ -1003,6 +1296,11 @@ document.addEventListener("input", (e) => {
     store.set("askText", state.askText);
     return renderDock();
   }
+  if (el.dataset.cue) {
+    const song = state.results && state.results.songs.find((s) => s.key === el.dataset.cue);
+    if (song) { song.cue = el.value; saveResults(); }
+    return;
+  }
   if (el.dataset.input === "plFilter") {
     state.plFilter = el.value;
     const pos = el.selectionStart;
@@ -1017,11 +1315,21 @@ document.addEventListener("change", (e) => {
   if (!el.dataset.filter) return;
   state.filters[el.dataset.filter] = el.type === "checkbox" ? el.checked : el.value;
   saveFilters();
-  render();
+  // Redraw after the tap has landed, and keep her in the box she moved to.
+  setTimeout(() => {
+    const next = document.activeElement && document.activeElement.dataset.filter;
+    render();
+    const again = next && document.querySelector(`[data-filter="${next}"]`);
+    if (again) again.focus();
+  }, 0);
 });
 
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") closeSheet();
+  if (e.key === "Escape") { closeSheet(); endDrag(false); }
+  if ((e.key === "ArrowUp" || e.key === "ArrowDown") && e.target.dataset.drag) {
+    e.preventDefault();
+    nudgeSong(e.target.dataset.drag, e.key === "ArrowUp" ? -1 : 1);
+  }
   if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && e.target.dataset.input === "askText") findSongs("request");
 });
 
