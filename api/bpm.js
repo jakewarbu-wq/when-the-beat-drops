@@ -1,6 +1,7 @@
 // Looks up real BPMs from GetSongBPM (https://getsongbpm.com) for a batch of
 // songs. Songs it can't find come back as null and the app shows the AI's
-// estimate labelled "approx." instead.
+// estimate labelled "approx." instead. Songs whose lookup failed (rate limit,
+// timeout) are left out of the results so the app asks again next time.
 import { json, handle, httpError, normalize, requireSpotifyUser } from "./_lib/http.js";
 
 const BPM_API = process.env.GETSONGBPM_API_BASE || "https://api.getsong.co";
@@ -22,7 +23,8 @@ export function POST(request) {
       while (next < songs.length) {
         const song = songs[next++];
         if (!song || !song.key) continue;
-        results[song.key] = await lookup(apiKey, String(song.title || ""), String(song.artist || ""));
+        const tempo = await lookup(apiKey, String(song.title || ""), String(song.artist || ""));
+        if (tempo !== undefined) results[song.key] = tempo;
       }
     }
     await Promise.all(Array.from({ length: CONCURRENCY }, worker));
@@ -39,7 +41,8 @@ async function lookup(apiKey, title, artist) {
 
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
-    if (!res.ok) return null;
+    if (res.status === 404) return null;
+    if (!res.ok) return undefined;
     const data = await res.json();
     const list = Array.isArray(data.search) ? data.search : [];
     const wantTitle = normalize(title);
@@ -54,6 +57,6 @@ async function lookup(apiKey, title, artist) {
     const tempo = match ? parseInt(match.tempo, 10) : NaN;
     return Number.isFinite(tempo) && tempo > 0 ? tempo : null;
   } catch {
-    return null;
+    return undefined;
   }
 }

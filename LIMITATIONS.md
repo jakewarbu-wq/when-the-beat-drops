@@ -14,6 +14,8 @@
 
 7. **"Songs she doesn't already have" checks the playlists she picked.** Suggestions already in those playlists are removed. Songs in her Liked Songs get a "♥ Liked" badge instead of being hidden. Checking every one of her playlists would mean reading her whole library on each search, which would make it slow.
 
-8. **Dismissed songs are remembered per device.** The list lives in the browser, so dismissing a song on her phone doesn't hide it on the laptop. Keeping it in sync would need a database and adds setup; it can be added later if it matters.
+8. **Dismissed songs and saved classes are remembered per device.** They live in the browser, so dismissing a song or writing cues on her phone doesn't carry over to the laptop. Keeping it in sync would need a database and adds setup; it can be added later if it matters.
 
 9. **Not yet tested against the live services.** The whole app was tested end to end on a simulated phone against simulated Spotify, Claude and GetSongBPM services: login, playlist reading, suggestions, dropping songs that don't exist, BPM lookup, filters, dismiss and undo, saving to new and existing playlists, and class setlists with running time. Real keys weren't available here, so the first real login is the first live test. GetSongBPM's documentation doesn't show a full response for title-plus-artist searches, so that part was built from their partial example. If every BPM shows "approx." even with the key set, that's the first place to look.
+
+10. **Cadence is worked out from BPM.** The RPM figure is the song's BPM, or half of it, whichever falls in a rideable 55 to 120 RPM range. When both do, the song's section or first tag decides. If the BPM is an AI estimate, the cadence is only as good as that estimate. Cues the AI suggests are general ride cues, not timed to moments in the song.
